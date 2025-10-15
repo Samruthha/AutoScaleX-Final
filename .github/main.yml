@@ -1,0 +1,60 @@
+name: AutoScaleX - CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main # Trigger on push to the main branch
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # 1. Checkout Code
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. Set up Docker Build Environment
+      - name: Set up QEMU and Docker BuildX
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 3. Log in to Docker Hub (or GHCR)
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }} # GitHub Secret
+          password: ${{ secrets.DOCKER_PASSWORD }} # GitHub Secret
+
+      # 4. Define Image Tag and Build/Push Image
+      - name: Build and Push Docker Image
+        id: docker_build
+        uses: docker/build-and-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile # Assuming Dockerfile is in the root
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/autoscale-x-service:latest
+          cache-from: type=gha
+
+      # 5. Set up kubectl for Deployment,
+      # This step requires a configured Kubernetes context or Kubeconfig
+      - name: Install and Configure kubectl
+        uses: azure/setup-kubectl@v4
+
+      # 6. Deploy to Kubernetes (using the new image)
+      - name: Deploy to K8s Cluster via Kubeconfig
+        run: |
+          # 6a. Write Kubeconfig Secret to File
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG_DATA }}" > ~/.kube/config
+          
+          # 6b. Update the Deployment YAML with the new Image Tag
+          # Patch deployment to force Kubernetes to pull the new 'latest' tag
+          kubectl set image deployment/autoscale-x-deployment \
+            autoscale-x-container=${{ secrets.DOCKER_USERNAME }}/autoscale-x-service:latest \
+            --namespace=autoscale-ns
+          
+          # 6c. Wait for rollout to complete
+          kubectl rollout status deployment/autoscale-x-deployment --namespace=autoscale-ns
